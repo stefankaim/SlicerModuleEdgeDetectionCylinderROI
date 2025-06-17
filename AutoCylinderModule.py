@@ -452,7 +452,7 @@ class AutoCylinderModuleWidget(ScriptedLoadableModuleWidget):
         del tempLabelmapNode
 
         #self.fixInvalidSegmentationMatrices() # because something in this codes creates a matrix (x1, y1, z1, w) (x2, y2, z2) (x3, y3, z3) and i dont know why :(
-        self.statusLabel.setText(f"Exported {exportCount} segment(s) to :\n{outputFolder}")
+        self.statusLabel.setText(f"Exported {exportCount} segment(s) to :\n{outputFolder}\n\nReload your saved files now in a new window!")
 
     def fixInvalidSegmentationMatrices(self):
         count_fixed = 0
