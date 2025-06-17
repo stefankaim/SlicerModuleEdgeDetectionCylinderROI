@@ -141,6 +141,8 @@ class AutoCylinderModuleWidget(ScriptedLoadableModuleWidget):
         self.basePoint = None
         self.topPoint = None
 
+        self.updateAvailableSegments()
+
     def extractCenterFromPlane(self, volumeNode, planeNode):
         ijkToRAS = vtk.vtkMatrix4x4()
         volumeNode.GetIJKToRASMatrix(ijkToRAS)
@@ -335,6 +337,20 @@ class AutoCylinderModuleWidget(ScriptedLoadableModuleWidget):
 
 
     def exportCSV(self):
+        reply = qt.QMessageBox.question(
+            slicer.util.mainWindow(),
+            "Warning: Saving after export destroys the .seg files!",
+            "\nPlease save your work **BEFORE** performing the Export!\n"
+            "The Export destroys your Segments and I don't know why!\n\n"
+            "Reload your data after the export in a new Window!\n"
+            "Did you save your work and want to continue?\n\n",
+            qt.QMessageBox.Yes | qt.QMessageBox.No
+        )
+
+        if reply != qt.QMessageBox.Yes:
+            self.statusLabel.setText("Export cancelled by user.")
+            return
+
         volumeNode = self.volumeSelectorExport.currentNode()
         selectedSegments = [self.selectedSegmentsList.item(i).text() for i in range(self.selectedSegmentsList.count)]
         outputFolder = self.outputPathButton.directory
@@ -446,29 +462,25 @@ class AutoCylinderModuleWidget(ScriptedLoadableModuleWidget):
             if segmentation is None:
                 continue
 
-            # Get direction matrix via binary labelmap representation
-            if segmentation.GetNumberOfSegments() == 0:
+            referenceVolumeNode = slicer.mrmlScene.GetFirstNodeByClass("vtkMRMLScalarVolumeNode")
+            if not referenceVolumeNode:
                 continue
 
-            # Get internal binary labelmap representation
-            binaryLabelmap = segmentation.GetSegmentRepresentation(segmentation.GetNthSegmentID(0), "BinaryLabelmapRepresentation")
-            if not binaryLabelmap:
+            tempLabelmapNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLLabelMapVolumeNode", "Fix_Labelmap")
+            success = slicer.modules.segmentations.logic().ExportSegmentsToLabelmapNode(
+                segNode, None, tempLabelmapNode, referenceVolumeNode)
+
+            if not success:
+                slicer.mrmlScene.RemoveNode(tempLabelmapNode)
                 continue
 
-            directionMatrix = binaryLabelmap.GetDirectionMatrix()
-            directionArray = np.eye(3)
-            for row in range(3):
-                for col in range(3):
-                    directionArray[row, col] = directionMatrix.GetElement(row, col)
+            fixedSegNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSegmentationNode", segNode.GetName() + "_fixed")
+            slicer.modules.segmentations.logic().ImportLabelmapToSegmentationNode(tempLabelmapNode, fixedSegNode)
 
-            # Check for invalid 4D coefficients (should be 3x3!)
-            if directionMatrix.GetNumberOfColumns() > 3:
-                print(f"❌ Invalid direction matrix in {segNode.GetName()}, correcting…")
-                corrected = vtk.vtkMatrix3x3()
-                for row in range(3):
-                    for col in range(3):
-                        corrected.SetElement(row, col, directionMatrix.GetElement(row, col))
-                binaryLabelmap.SetDirectionMatrix(corrected)
-                count_fixed += 1
+            slicer.mrmlScene.RemoveNode(segNode)
+            fixedSegNode.SetName(segNode.GetName())
 
-        print(f"✅ Segmentation matrices checked. Fixed: {count_fixed}")
+            slicer.mrmlScene.RemoveNode(tempLabelmapNode)
+            count_fixed += 1
+
+        print(f"✅ Reparierte Segmente durch Reimport: {count_fixed}")
