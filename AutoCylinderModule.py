@@ -333,20 +333,24 @@ class AutoCylinderModuleWidget(ScriptedLoadableModuleWidget):
             self.availableSegmentsList.addItem(item.text())
             self.selectedSegmentsList.takeItem(self.selectedSegmentsList.row(item))
 
+
     def exportCSV(self):
         volumeNode = self.volumeSelectorExport.currentNode()
         selectedSegments = [self.selectedSegmentsList.item(i).text() for i in range(self.selectedSegmentsList.count)]
         outputFolder = self.outputPathButton.directory
-        
+
         if not volumeNode:
             self.statusLabel.setText("A CT-Volume needs to be selected!")
             return
-        
+
         if not selectedSegments:
             self.statusLabel.setText("A Segment needs to be selected!")
             return
-        
+
         exportCount = 0
+        ctArray = slicer.util.arrayFromVolume(volumeNode)
+
+        tempLabelmapNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLLabelMapVolumeNode", "Temp_Labelmap")
 
         for fullName in selectedSegments:
             if "::" not in fullName:
@@ -372,40 +376,50 @@ class AutoCylinderModuleWidget(ScriptedLoadableModuleWidget):
                 self.statusLabel.setText(f"Segment '{segmentName}' not found.")
                 continue
 
-            labelmapNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLLabelMapVolumeNode", "Temp_Labelmap")
-            slicer.modules.segmentations.logic().ExportSegmentsToLabelmapNode(segmentationNode, [segmentID], labelmapNode, volumeNode)
+            tempLabelmapNode.SetAndObserveImageData(None)
+            exportSuccess = slicer.modules.segmentations.logic().ExportSegmentsToLabelmapNode(
+                segmentationNode, [segmentID], tempLabelmapNode, volumeNode)
 
-            ctArray = slicer.util.arrayFromVolume(volumeNode)
-            labelArray = slicer.util.arrayFromVolume(labelmapNode)
+            if not exportSuccess or not tempLabelmapNode.GetImageData():
+                self.statusLabel.setText(f"Export failed for segment '{segmentName}'. Skipping.")
+                continue
+
+            labelArray = slicer.util.arrayFromVolume(tempLabelmapNode)
 
             ijkToRAS = vtk.vtkMatrix4x4()
             volumeNode.GetIJKToRASMatrix(ijkToRAS)
             z_ras_coords = [ijkToRAS.MultiplyPoint([0, 0, z, 1.0])[2] for z in range(ctArray.shape[0])]
-            
+
             safeVolumeName = self.cleanName(volumeNode.GetName())
             safeSegNodeName = self.cleanName(segNodeName)
 
             locale.setlocale(locale.LC_ALL, '')
-
             decimal_point = locale.localeconv()["decimal_point"]
             csv_delimiter = ';' if decimal_point == ',' else ','
 
+            non_empty_slices = np.unique(np.where(labelArray > 0)[0])
             sliceResults = []
-            for z in range(ctArray.shape[0]):
+
+            for z in non_empty_slices:
                 sliceCT = ctArray[z]
                 sliceMask = labelArray[z] > 0
                 huValues = sliceCT[sliceMask]
                 if huValues.size > 0:
+                    mean = np.mean(huValues)
+                    std = np.std(huValues)
+                    minVal = np.min(huValues)
+                    maxVal = np.max(huValues)
+                    stderr = std / np.sqrt(huValues.size)
                     def fmt(x): return locale.format_string("%.9f", x, grouping=True)
                     sliceResults.append({
                         "SliceIndex": str(z),
                         "Z_Slice_mm": fmt(z_ras_coords[z]),
-                        "Mean": fmt(np.mean(huValues)),
-                        "StdDev": fmt(np.std(huValues)),
-                        "Min": fmt(np.min(huValues)),
-                        "Max": fmt(np.max(huValues)),
+                        "Mean": fmt(mean),
+                        "StdDev": fmt(std),
+                        "Min": fmt(minVal),
+                        "Max": fmt(maxVal),
                         "VoxelCount": str(huValues.size),
-                        "StdErr": fmt(np.std(huValues) / np.sqrt(huValues.size))
+                        "StdErr": fmt(stderr)
                     })
 
             outputPath = os.path.join(outputFolder, f"{safeVolumeName}_{safeSegNodeName}_statistics.csv")
@@ -414,8 +428,47 @@ class AutoCylinderModuleWidget(ScriptedLoadableModuleWidget):
                 writer.writeheader()
                 for row in sliceResults:
                     writer.writerow(row)
-            
-            slicer.mrmlScene.RemoveNode(labelmapNode)
+
             exportCount += 1
 
+        tempLabelmapNode.SetAndObserveImageData(None)
+        slicer.mrmlScene.RemoveNode(tempLabelmapNode)
+        del tempLabelmapNode
+
+        #self.fixInvalidSegmentationMatrices() # because something in this codes creates a matrix (x1, y1, z1, w) (x2, y2, z2) (x3, y3, z3) and i dont know why :(
         self.statusLabel.setText(f"Exported {exportCount} segment(s) to :\n{outputFolder}")
+
+    def fixInvalidSegmentationMatrices(self):
+        count_fixed = 0
+
+        for segNode in slicer.util.getNodesByClass("vtkMRMLSegmentationNode"):
+            segmentation = segNode.GetSegmentation()
+            if segmentation is None:
+                continue
+
+            # Get direction matrix via binary labelmap representation
+            if segmentation.GetNumberOfSegments() == 0:
+                continue
+
+            # Get internal binary labelmap representation
+            binaryLabelmap = segmentation.GetSegmentRepresentation(segmentation.GetNthSegmentID(0), "BinaryLabelmapRepresentation")
+            if not binaryLabelmap:
+                continue
+
+            directionMatrix = binaryLabelmap.GetDirectionMatrix()
+            directionArray = np.eye(3)
+            for row in range(3):
+                for col in range(3):
+                    directionArray[row, col] = directionMatrix.GetElement(row, col)
+
+            # Check for invalid 4D coefficients (should be 3x3!)
+            if directionMatrix.GetNumberOfColumns() > 3:
+                print(f"❌ Invalid direction matrix in {segNode.GetName()}, correcting…")
+                corrected = vtk.vtkMatrix3x3()
+                for row in range(3):
+                    for col in range(3):
+                        corrected.SetElement(row, col, directionMatrix.GetElement(row, col))
+                binaryLabelmap.SetDirectionMatrix(corrected)
+                count_fixed += 1
+
+        print(f"✅ Segmentation matrices checked. Fixed: {count_fixed}")
