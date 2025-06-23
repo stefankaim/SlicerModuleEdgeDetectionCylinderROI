@@ -52,7 +52,29 @@ class AutoCylinderModuleWidget(ScriptedLoadableModuleWidget):
 
         self.detectButton = qt.QPushButton("Detect Center Points and Radius")
         self.detectButton.clicked.connect(self.detectCentersAndRadius)
-        layout.addRow(self.detectButton)
+        layout.addRow("Visualize Center Points:",self.detectButton)
+
+        layout.addRow(qt.QLabel("Threshold Settings. Change if Center is not correct detected"))
+
+        self.upperThresholdSpin = qt.QSlider(qt.Qt.Horizontal)
+        self.upperThresholdSpin.setRange(0, 200)
+        self.upperThresholdSpin.setSingleStep(1)
+        self.upperThresholdSpin.setValue(100)
+        self.upperThresholdSpinLabel = qt.QLabel("10.0 %")
+        self.upperThresholdSpin.valueChanged.connect(self.updateUpperLabel)
+        self.upperThresholdSpin.setToolTip("Upper threshold for HU value range.")
+        layout.addRow("Upper Threshold (x ≤ HU * upper):",self.upperThresholdSpinLabel)
+        layout.addRow(self.upperThresholdSpin)
+
+        self.lowerThresholdSpin = qt.QSlider(qt.Qt.Horizontal)
+        self.lowerThresholdSpin.setRange(00, 200)
+        self.lowerThresholdSpin.setSingleStep(1)
+        self.lowerThresholdSpin.setValue(100)
+        self.lowerThresholdSpinLabel = qt.QLabel("10.0 %")
+        self.lowerThresholdSpin.valueChanged.connect(self.updateLowerLabel)
+        self.lowerThresholdSpin.setToolTip("Lower threshold for HU value range.")
+        layout.addRow("Lower Threshold (x ≥ HU * lower):", self.lowerThresholdSpinLabel)
+        layout.addRow(self.lowerThresholdSpin)
 
         line = qt.QFrame()
         line.setFrameShape(qt.QFrame.HLine)
@@ -147,6 +169,12 @@ class AutoCylinderModuleWidget(ScriptedLoadableModuleWidget):
 
         self.updateAvailableSegments()
 
+    def updateLowerLabel(self, value):
+        self.lowerThresholdSpinLabel.setText(f"{value / 10.0:.1f} %")
+
+    def updateUpperLabel(self, value):
+        self.upperThresholdSpinLabel.setText(f"{value / 10.0:.1f} %")
+
     def extractCenterFromPlane(self, volumeNode, planeNode):
         ijkToRAS = vtk.vtkMatrix4x4()
         volumeNode.GetIJKToRASMatrix(ijkToRAS)
@@ -184,8 +212,10 @@ class AutoCylinderModuleWidget(ScriptedLoadableModuleWidget):
             return None, None
 
         hu_center = roi[center_y, center_x]
-        lower = hu_center * 0.9
-        upper = hu_center * 1.1
+        lower_percent = self.lowerThresholdSpin.value / 10.0
+        upper_percent = self.upperThresholdSpin.value / 10.0
+        lower = hu_center * (1 - lower_percent / 100)#0.9
+        upper = hu_center * (1 + upper_percent / 100)#1.1
         mask = (roi >= lower) & (roi <= upper)
         if not np.any(mask):
             return None, None
