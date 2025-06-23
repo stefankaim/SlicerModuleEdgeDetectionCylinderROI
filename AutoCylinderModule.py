@@ -46,6 +46,10 @@ class AutoCylinderModuleWidget(ScriptedLoadableModuleWidget):
         self.plane1Selector.currentNodeChanged.connect(self.disableGenerate)
         layout.addRow("Bottom Plane:", self.plane1Selector)
 
+        self.checkCenterPoints = qt.QCheckBox("Show Center as ListPoint")
+        self.checkCenterPoints.setChecked(True)
+        layout.addRow(self.checkCenterPoints)
+
         self.detectButton = qt.QPushButton("Detect Center Points and Radius")
         self.detectButton.clicked.connect(self.detectCentersAndRadius)
         layout.addRow(self.detectButton)
@@ -196,15 +200,15 @@ class AutoCylinderModuleWidget(ScriptedLoadableModuleWidget):
         centerRAS = [0.0, 0.0, 0.0, 1.0]
         ijkToRAS.MultiplyPoint(centerIJK, centerRAS)
 
-        # DEBUG, creates MarkupPoints in the found center of the planes
-        #name = self.nameInput.text.strip()
-        #markupsLogic = slicer.modules.markups.logic()
-        #listNode = slicer.util.getNode(f"{name}_CenterPoints") if slicer.util.getNodesByClass("vtkMRMLMarkupsFiducialNode") else slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsFiducialNode", f"{name}_CenterPoints")
-        #listNode.AddFiducialFromArray(centerRAS[:3], planeNode.GetName())
-
         return centerRAS[:3], radius_mm
 
     def detectCentersAndRadius(self):
+        nameCenterPoints = "TEMPROICENTER"
+        existingNodes = slicer.util.getNodesByClass("vtkMRMLMarkupsFiducialNode")
+        for node in existingNodes:
+            if node.GetName() == f"{nameCenterPoints}_Points":
+                slicer.mrmlScene.RemoveNode(node)
+
         volumeNode = self.volumeSelector.currentNode()
         plane1 = self.plane1Selector.currentNode()
         plane2 = self.plane2Selector.currentNode()
@@ -217,6 +221,16 @@ class AutoCylinderModuleWidget(ScriptedLoadableModuleWidget):
         if base is None or top is None:
             slicer.util.errorDisplay("Could not detect valid content in ROI.")
             return
+        
+        
+        if self.checkCenterPoints.isChecked():
+            listNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsFiducialNode", f"{nameCenterPoints}_Points")
+            if base:
+                listNode.AddControlPoint(vtk.vtkVector3d(*base))
+                listNode.SetNthControlPointLabel(0, "Base")
+            if top:
+                listNode.AddControlPoint(vtk.vtkVector3d(*top))
+                listNode.SetNthControlPointLabel(listNode.GetNumberOfControlPoints() - 1, "Top")
 
         self.basePoint = base
         self.topPoint = top
