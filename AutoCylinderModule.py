@@ -7,6 +7,7 @@ import vtk, ctk
 import numpy as np
 import locale
 from slicer.ScriptedLoadableModule import *
+from collections import deque
 
 class AutoCylinderModule(ScriptedLoadableModule):
     def __init__(self, parent):
@@ -21,6 +22,7 @@ class AutoCylinderModule(ScriptedLoadableModule):
 class AutoCylinderModuleWidget(ScriptedLoadableModuleWidget):
     def setup(self):
         ScriptedLoadableModuleWidget.setup(self)
+        self.moveDelta = 0.2
 
         layout = qt.QFormLayout()
         layout.addRow(qt.QLabel("Cylinder Detection"))
@@ -46,9 +48,9 @@ class AutoCylinderModuleWidget(ScriptedLoadableModuleWidget):
         self.plane1Selector.currentNodeChanged.connect(self.disableGenerate)
         layout.addRow("Bottom Plane:", self.plane1Selector)
 
-        self.checkCenterPoints = qt.QCheckBox("Show Center as ListPoint")
-        self.checkCenterPoints.setChecked(True)
-        layout.addRow(self.checkCenterPoints)
+        #self.checkCenterPoints = qt.QCheckBox("Show Center as ListPoint")
+        #self.checkCenterPoints.setChecked(True)
+        #layout.addRow(self.checkCenterPoints)
 
         self.detectButton = qt.QPushButton("Detect Center Points and Radius")
         self.detectButton.clicked.connect(self.detectCentersAndRadius)
@@ -56,25 +58,15 @@ class AutoCylinderModuleWidget(ScriptedLoadableModuleWidget):
 
         layout.addRow(qt.QLabel("Threshold Settings. Change if Center is not correct detected"))
 
-        self.upperThresholdSpin = qt.QSlider(qt.Qt.Horizontal)
-        self.upperThresholdSpin.setRange(0, 200)
-        self.upperThresholdSpin.setSingleStep(1)
-        self.upperThresholdSpin.setValue(100)
-        self.upperThresholdSpinLabel = qt.QLabel("10.0 %")
-        self.upperThresholdSpin.valueChanged.connect(self.updateUpperLabel)
-        self.upperThresholdSpin.setToolTip("Upper threshold for HU value range.")
-        layout.addRow("Upper Threshold (x ≤ HU * upper):",self.upperThresholdSpinLabel)
-        layout.addRow(self.upperThresholdSpin)
-
-        self.lowerThresholdSpin = qt.QSlider(qt.Qt.Horizontal)
-        self.lowerThresholdSpin.setRange(00, 200)
-        self.lowerThresholdSpin.setSingleStep(1)
-        self.lowerThresholdSpin.setValue(100)
-        self.lowerThresholdSpinLabel = qt.QLabel("10.0 %")
-        self.lowerThresholdSpin.valueChanged.connect(self.updateLowerLabel)
-        self.lowerThresholdSpin.setToolTip("Lower threshold for HU value range.")
-        layout.addRow("Lower Threshold (x ≥ HU * lower):", self.lowerThresholdSpinLabel)
-        layout.addRow(self.lowerThresholdSpin)
+        self.thresholdSpin = qt.QSlider(qt.Qt.Horizontal)
+        self.thresholdSpin.setRange(0, 300)
+        self.thresholdSpin.setSingleStep(1)
+        self.thresholdSpin.setValue(100)
+        self.thresholdSpinLabel = qt.QLabel("100")
+        self.thresholdSpin.valueChanged.connect(self.updateUpperLabel)
+        self.thresholdSpin.setToolTip("Range for HU value to grow.")
+        layout.addRow("HU Range (Center HU ± value):",self.thresholdSpinLabel)
+        layout.addRow(self.thresholdSpin)
 
         line = qt.QFrame()
         line.setFrameShape(qt.QFrame.HLine)
@@ -99,13 +91,56 @@ class AutoCylinderModuleWidget(ScriptedLoadableModuleWidget):
         self.heightDisplay.setReadOnly(True)
         layout.addRow("Height [mm]:", self.heightDisplay)
 
+        self.deltaSpinBox = qt.QDoubleSpinBox()
+        self.deltaSpinBox.setMinimum(0.01)
+        self.deltaSpinBox.setMaximum(5.0)
+        self.deltaSpinBox.setSingleStep(0.05)
+        self.deltaSpinBox.setValue(self.moveDelta)
+        self.deltaSpinBox.setSuffix(" mm")
+        layout.addRow("Delta Movement (for Buttons):", self.deltaSpinBox)
+        self.deltaSpinBox.valueChanged.connect(lambda val: self.setMoveDelta(val))
+
+        topRow = qt.QHBoxLayout()
         self.topCoord = qt.QLineEdit()
         self.topCoord.setReadOnly(True)
-        layout.addRow("Center-Top (X,Y,Z):", self.topCoord)
+        topRow.addWidget(self.topCoord)
 
+        self.topLeftButton = qt.QPushButton("←")
+        self.topRightButton = qt.QPushButton("→")
+        self.topUpButton = qt.QPushButton("↑")
+        self.topDownButton = qt.QPushButton("↓")
+        self.topLeftButton.clicked.connect(lambda: self.moveFoundPoint(dx=+self.moveDelta, topOrBase=1))
+        self.topRightButton.clicked.connect(lambda: self.moveFoundPoint(dx=-self.moveDelta, topOrBase=1))
+        self.topUpButton.clicked.connect(lambda: self.moveFoundPoint(dy=+self.moveDelta, topOrBase=1))
+        self.topDownButton.clicked.connect(lambda: self.moveFoundPoint(dy=-self.moveDelta, topOrBase=1))
+        
+        topRow.addWidget(self.topLeftButton)
+        topRow.addWidget(self.topRightButton)
+        topRow.addWidget(self.topUpButton)
+        topRow.addWidget(self.topDownButton)
+
+        layout.addRow("Center-Top (X,Y,Z):", topRow)
+
+        botRow = qt.QHBoxLayout()
         self.botCoord = qt.QLineEdit()
         self.botCoord.setReadOnly(True)
-        layout.addRow("Center-Bottom (X,Y,Z):", self.botCoord)
+        botRow.addWidget(self.botCoord)
+
+        self.botLeftButton = qt.QPushButton("←")
+        self.botRightButton = qt.QPushButton("→")
+        self.botUpButton = qt.QPushButton("↑")
+        self.botDownButton = qt.QPushButton("↓")
+        self.botLeftButton.clicked.connect(lambda: self.moveFoundPoint(dx=+self.moveDelta, topOrBase=0))
+        self.botRightButton.clicked.connect(lambda: self.moveFoundPoint(dx=-self.moveDelta, topOrBase=0))
+        self.botUpButton.clicked.connect(lambda: self.moveFoundPoint(dy=+self.moveDelta, topOrBase=0))
+        self.botDownButton.clicked.connect(lambda: self.moveFoundPoint(dy=-self.moveDelta, topOrBase=0))
+
+        botRow.addWidget(self.botLeftButton)
+        botRow.addWidget(self.botRightButton)
+        botRow.addWidget(self.botUpButton)
+        botRow.addWidget(self.botDownButton)
+
+        layout.addRow("Center-Bottom (X,Y,Z):", botRow)
 
         self.generateButton = qt.QPushButton("Generate Cylinder")
         self.generateButton.clicked.connect(self.generateCylinder)
@@ -169,11 +204,34 @@ class AutoCylinderModuleWidget(ScriptedLoadableModuleWidget):
 
         self.updateAvailableSegments()
 
-    def updateLowerLabel(self, value):
-        self.lowerThresholdSpinLabel.setText(f"{value / 10.0:.1f} %")
+    def setMoveDelta(self, val):
+        self.setMoveDelta = val
+
+    def moveFoundPoint(self, dx=0.0, dy=0.0, topOrBase=1):
+        name = "TEMPROICENTER_Points"
+        listNode = slicer.util.getFirstNodeByName(name)
+        if not listNode or listNode.GetNumberOfControlPoints() < 2:
+            slicer.util.errorDisplay("Top point not found.")
+            return
+
+        x, y, z = listNode.GetNthControlPointPositionVector(topOrBase) #1: Top, 0: Base
+        listNode.SetNthControlPointPosition(topOrBase, x + dx, y + dy, z)
+        self.updateCoordDisplay()
+
+    def updateCoordDisplay(self):
+        name = "TEMPROICENTER_Points"
+        listNode = slicer.util.getFirstNodeByName(name)
+        if listNode and listNode.GetNumberOfControlPoints() >= 2:
+            x0, y0, z0 = listNode.GetNthControlPointPositionVector(0)
+            x1, y1, z1 = listNode.GetNthControlPointPositionVector(1)
+            self.botCoord.setText(f"{x0:.2f}, {y0:.2f}, {z0:.2f}")
+            self.topCoord.setText(f"{x1:.2f}, {y1:.2f}, {z1:.2f}")
+
+            self.basePoint = [x0, y0, z0]
+            self.topPoint = [x1, y1, z1]
 
     def updateUpperLabel(self, value):
-        self.upperThresholdSpinLabel.setText(f"{value / 10.0:.1f} %")
+        self.thresholdSpinLabel.setText(f"{value} HU")
 
     def extractCenterFromPlane(self, volumeNode, planeNode):
         ijkToRAS = vtk.vtkMatrix4x4()
@@ -197,33 +255,56 @@ class AutoCylinderModuleWidget(ScriptedLoadableModuleWidget):
             return None, None
 
         slice2D = array[z]
-        x0 = int(round(centerIJK[0] - width))
-        x1 = int(round(centerIJK[0] + width))
-        y0 = int(round(centerIJK[1] - height))
-        y1 = int(round(centerIJK[1] + height))
+        x0 = max(0, int(round(centerIJK[0] - width)))
+        x1 = min(slice2D.shape[1], int(round(centerIJK[0] + width)))
+        y0 = max(0, int(round(centerIJK[1] - height)))
+        y1 = min(slice2D.shape[0], int(round(centerIJK[1] + height)))
         roi = slice2D[y0:y1, x0:x1]
 
-        if roi.size == 0 or np.max(roi) == np.min(roi):
+        if roi.size == 0:
             return None, None
-
+        
         center_x = int(round(centerIJK[0])) - x0
         center_y = int(round(centerIJK[1])) - y0
         if center_x < 0 or center_x >= roi.shape[1] or center_y < 0 or center_y >= roi.shape[0]:
+            print("Seedpoint out of bounds of ROI.")
             return None, None
 
+        # HU Thresholds
         hu_center = roi[center_y, center_x]
-        lower_percent = self.lowerThresholdSpin.value / 10.0
-        upper_percent = self.upperThresholdSpin.value / 10.0
-        lower = hu_center * (1 - lower_percent / 100)#0.9
-        upper = hu_center * (1 + upper_percent / 100)#1.1
-        mask = (roi >= lower) & (roi <= upper)
-        if not np.any(mask):
+
+        lower = hu_center - self.thresholdSpin.value
+        upper = hu_center + self.thresholdSpin.value
+
+        # Region-Growing in 2D
+        visited = np.zeros_like(roi, dtype=bool)
+        region_points = []
+        queue = deque()
+        queue.append((center_y, center_x))
+
+        while queue:
+            y, x = queue.popleft()
+            if visited[y, x]:
+                continue
+            visited[y, x] = True
+            if lower <= roi[y, x] <= upper:
+                region_points.append((y, x))
+                for dy in [-1, 0, 1]:
+                    for dx in [-1, 0, 1]:
+                        ny, nx = y + dy, x + dx
+                        if (0 <= ny < roi.shape[0]) and (0 <= nx < roi.shape[1]) and not visited[ny, nx]:
+                            queue.append((ny, nx))
+
+        if not region_points:
             return None, None
 
-        y_coords, x_coords = np.nonzero(mask)
+        # Centroid and Radius
+        y_coords, x_coords = zip(*region_points)
         cx = np.mean(x_coords) + x0
         cy = np.mean(y_coords) + y0
-        radius = np.median(np.sqrt((x_coords - np.mean(x_coords)) ** 2 + (y_coords - np.mean(y_coords)) ** 2))
+        
+        radius = np.median(np.sqrt((np.array(x_coords) - np.mean(x_coords))**2 +
+                                (np.array(y_coords) - np.mean(y_coords))**2))
         radius_mm = radius * spacing[0]
 
         centerIJK = np.array([cx, cy, z, 1.0])
@@ -253,14 +334,13 @@ class AutoCylinderModuleWidget(ScriptedLoadableModuleWidget):
             return
         
         
-        if self.checkCenterPoints.isChecked():
-            listNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsFiducialNode", f"{nameCenterPoints}_Points")
-            if base:
-                listNode.AddControlPoint(vtk.vtkVector3d(*base))
-                listNode.SetNthControlPointLabel(0, "Base")
-            if top:
-                listNode.AddControlPoint(vtk.vtkVector3d(*top))
-                listNode.SetNthControlPointLabel(listNode.GetNumberOfControlPoints() - 1, "Top")
+        listNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsFiducialNode", f"{nameCenterPoints}_Points")
+        if base:
+            listNode.AddControlPoint(vtk.vtkVector3d(*base))
+            listNode.SetNthControlPointLabel(0, "Base")
+        if top:
+            listNode.AddControlPoint(vtk.vtkVector3d(*top))
+            listNode.SetNthControlPointLabel(listNode.GetNumberOfControlPoints() - 1, "Top")
 
         self.basePoint = base
         self.topPoint = top
