@@ -12,7 +12,7 @@ from collections import deque
 class AutoCylinderModule(ScriptedLoadableModule):
     def __init__(self, parent):
         ScriptedLoadableModule.__init__(self, parent)
-        parent.title = "Cylinder by Edge-Detection"
+        parent.title = "Cylinder by Region-Growing"
         parent.categories = ["ROIs"]
         parent.dependencies = []
         parent.contributors = ["Stefan Kaim"]
