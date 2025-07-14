@@ -550,7 +550,7 @@ class AutoCylinderModuleWidget(ScriptedLoadableModuleWidget):
                     minVal = np.min(huValues)
                     maxVal = np.max(huValues)
                     stderr = std / np.sqrt(huValues.size)
-                    def fmt(x): return locale.format_string("%.9f", x, grouping=True)
+                    def fmt(x): return locale.format_string("%.9f", x, grouping=False)
                     sliceResults.append({
                         "SliceIndex": str(z),
                         "Z_Slice_mm": fmt(z_ras_coords[z]),
